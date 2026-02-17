@@ -16,54 +16,14 @@
 ### 1.2 核心架构
 
 ```
-你的应用 → ClaudeSDKClient / query() → Claude Code CLI 子进程 → Anthropic API
+你的应用 → ClaudeSDKClient → Claude Code CLI 子进程 → Anthropic API
 ```
 
 SDK 通过子进程启动 Claude Code CLI，实际 API 调用由 CLI 完成。运行机器需能执行 Claude Code（SDK 安装时已打包）。
 
 ---
 
-## 2. 两种使用方式
-
-### 2.1 query() —— 一次性查询（无状态）
-
-适用于：单次问答、批处理、不依赖对话历史的场景。
-
-```python
-import anyio
-from claude_agent_sdk import query, AssistantMessage, TextBlock, ResultMessage
-
-async def single_query(prompt: str):
-    replies = []
-    async for message in query(prompt=prompt):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    replies.append(block.text)
-        elif isinstance(message, ResultMessage):
-            cost = message.total_cost_usd
-    return replies, cost
-```
-
-带配置：
-
-```python
-from claude_agent_sdk import query, ClaudeAgentOptions
-
-options = ClaudeAgentOptions(
-    system_prompt="You are a helpful assistant.",
-    cwd="/path/to/project",
-    allowed_tools=["Read", "Write", "Bash"],
-    permission_mode="acceptEdits",
-    max_turns=10,
-)
-
-async for message in query(prompt="...", options=options):
-    # 处理消息
-    pass
-```
-
-### 2.2 ClaudeSDKClient —— 交互式对话（有状态）
+## 2. ClaudeSDKClient 使用方式（有状态）
 
 适用于：多轮对话、聊天应用、需要保持上下文、需要 interrupt 等能力。
 
@@ -103,23 +63,6 @@ async def multi_turn_chat():
 
 ## 3. HTTP 接口设计方案
 
-### 3.1 无状态接口（推荐用于简单问答）
-
-每次请求独立，不依赖历史。使用 `query()`，每次调用会新建并回收子进程。
-
-```python
-# 伪代码
-@app.post("/chat")
-async def chat(request: ChatRequest):
-    replies = []
-    async for msg in query(prompt=request.prompt, options=...):
-        # 收集 AssistantMessage 中的 TextBlock
-        ...
-    return {"replies": replies}
-```
-
-### 3.2 有状态接口（多轮对话）
-
 按 session 维护 `ClaudeSDKClient`，同一 session 复用同一 client。
 
 ```python
@@ -158,7 +101,6 @@ async def chat(session_id: str, request: ChatRequest):
 
 | API | 用途 |
 |-----|------|
-| `query(prompt=..., options=...)` | 一次性查询，返回 `AsyncIterator[Message]` |
 | `ClaudeSDKClient(options=...)` | 交互式客户端 |
 | `client.query(prompt)` | 发送用户消息 |
 | `client.receive_response()` | 接收本轮完整回复（到 ResultMessage 结束） |
@@ -225,8 +167,10 @@ from claude_agent_sdk import (
 )
 
 try:
-    async for msg in query(prompt="..."):
-        ...
+    async with ClaudeSDKClient() as client:
+        await client.query(user_message)
+        async for msg in client.receive_response():
+            ...
 except CLINotFoundError:
     return {"error": "Claude Code 未安装"}
 except ProcessError as e:
